@@ -1,0 +1,39 @@
+Folder PATH listing
+Volume serial number is 2E4F-5C6F
+C:.
+|   .bat
+|   .eslintrc.cjs
+|   .gitignore
+|   index.html
+|   package.json
+|   postcss.config.js
+|   README.md
+|   tailwind.config.js
+|   tree.txt
+|   tsconfig.json
+|   tsconfig.node.json
+|   vite.config.ts
+|   
+\---src
+    |   App.tsx
+    |   AppRouter.tsx
+    |   index.css
+    |   index.tsx
+    |   
+    +---components
+    |       Header.tsx
+    |       PushToTalkButton.tsx
+    |       
+    +---contexts
+    |       AuthContext.tsx
+    |       RoomContext.tsx
+    |       TranscriptionContext.tsx
+    |       
+    \---pages
+            AdminDashboard.tsx
+            Login.tsx
+            Register.tsx
+            Room.tsx
+            Rooms.tsx
+            UserProfile.tsx
+            
