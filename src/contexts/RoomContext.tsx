@@ -1,16 +1,22 @@
-import React, { useEffect, useState, createContext, useContext, useRef, useCallback } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
 
-// Interfaces
-interface Room {
+export interface Room {
   id: string;
   name: string;
   createdBy: string;
   participants: string[];
 }
 
+interface SocketContextValue {
+  socket: WebSocket | null;
+  status: 'connecting' | 'connected' | 'disconnected';
+}
+
 interface RoomContextType {
   rooms: Room[];
+  isLoading: boolean;
+  connectionStatus: SocketContextValue['status'];
   createRoom: (name: string) => void;
   joinRoom: (roomId: string) => void;
   leaveRoom: (roomId: string) => void;
@@ -19,165 +25,112 @@ interface RoomContextType {
   deleteRoom: (roomId: string) => void;
   userCanEditRoom: (roomId: string) => boolean;
   ws: WebSocket | null;
-  userId: string;
 }
 
-// สร้าง Context สำหรับ WebSocket และ Room
-const WebSocketContext = createContext<WebSocket | null>(null);
+const WebSocketContext = createContext<SocketContextValue>({ socket: null, status: 'connecting' });
 const RoomContext = createContext<RoomContextType | null>(null);
 
 export const useWebSocket = () => useContext(WebSocketContext);
 export const useRoom = () => {
-    const context = useContext(RoomContext);
-    if (!context) {
-        throw new Error('useRoom must be used within a RoomProvider');
-    }
-    return context;
+  const context = useContext(RoomContext);
+  if (!context) throw new Error('useRoom must be used within a RoomProvider');
+  return context;
 };
 
-// Provider สำหรับจัดการการเชื่อมต่อ WebSocket
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const wsRef = useRef<WebSocket | null>(null);
-    const [isConnected, setIsConnected] = useState(false);
+  const [value, setValue] = useState<SocketContextValue>({ socket: null, status: 'connecting' });
+  const reconnectTimer = useRef<number>();
 
-    useEffect(() => {
-        const connect = () => {
-            // ในตอน dev ให้ใช้ 'ws://localhost:8080'
-            const socketUrl = 'ws://localhost:8080';
-            const socket = new WebSocket(socketUrl);
-            wsRef.current = socket;
+  useEffect(() => {
+    let active = true;
+    let socket: WebSocket | null = null;
 
-            socket.onopen = () => {
-                console.log("WebSocket Connected");
-                setIsConnected(true);
-            };
-            socket.onclose = () => {
-                console.log("WebSocket Disconnected, attempting to reconnect...");
-                setIsConnected(false);
-                setTimeout(connect, 3000); // ลองต่อใหม่ใน 3 วินาที
-            };
-            socket.onerror = (err) => {
-                console.error("WebSocket Error: ", err);
-                socket.close();
-            };
-        };
-        connect();
-
-        return () => {
-            if (wsRef.current) {
-                wsRef.current.close();
-            }
-        };
-    }, []);
-
-    return (
-        <WebSocketContext.Provider value={wsRef.current}>
-            {children}
-        </WebSocketContext.Provider>
-    );
-};
-
-// Provider สำหรับจัดการข้อมูลห้อง
-export const RoomProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [rooms, setRooms] = useState<Room[]>([]);
-    const [userId, setUserId] = useState('');
-    const { currentUser, isAdmin } = useAuth();
-    const ws = useWebSocket();
-
-    useEffect(() => {
-        if (!ws) return;
-
-        const handleMessage = (event: MessageEvent) => {
-            try {
-                const data = JSON.parse(event.data);
-                switch (data.type) {
-                    case 'initial-data':
-                    case 'room-update':
-                        setRooms(data.payload.rooms);
-                        break;
-                    case 'participant-update':
-                        setRooms(prevRooms => prevRooms.map(r =>
-                            r.id === data.payload.roomId ? { ...r, participants: data.payload.participants } : r
-                        ));
-                        break;
-                }
-            } catch (error) {
-                console.error("Failed to parse WebSocket message:", error);
-            }
-        };
-
-        ws.addEventListener('message', handleMessage);
-
-        const requestInitialData = () => {
-             if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'get-initial-data' }));
-            }
-        };
-
-        if (ws.readyState === WebSocket.OPEN) {
-            requestInitialData();
-        } else {
-            ws.onopen = requestInitialData;
-        }
-
-        return () => {
-            ws.removeEventListener('message', handleMessage);
-        };
-    }, [ws]);
-
-    const sendWsMessage = useCallback((type: string, payload: object) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type, payload }));
-        } else {
-            console.error("WebSocket is not connected.");
-        }
-    }, [ws]);
-
-    const createRoom = useCallback((name: string) => {
-        if (!currentUser) return;
-        sendWsMessage('create-room', { name, createdBy: currentUser.id });
-    }, [currentUser, sendWsMessage]);
-
-    const joinRoom = useCallback((roomId: string) => {
-        if (!currentUser) return;
-        sendWsMessage('join-room', { roomId, displayName: currentUser.username });
-    }, [currentUser, sendWsMessage]);
-
-    const leaveRoom = useCallback((roomId: string) => {
-        if (!currentUser) return;
-        sendWsMessage('leave-room', { roomId });
-    }, [currentUser, sendWsMessage]);
-
-    const updateRoomName = useCallback((roomId: string, newName: string) => {
-        sendWsMessage('update-room-name', { roomId, newName });
-    }, [sendWsMessage]);
-    
-    const deleteRoom = useCallback((roomId: string) => {
-        sendWsMessage('delete-room', { roomId });
-    }, [sendWsMessage]);
-
-    const getRoom = (roomId: string) => rooms.find(room => room.id === roomId);
-
-    const userCanEditRoom = useCallback((roomId: string): boolean => {
-        if (!currentUser) return false;
-        if (isAdmin()) return true;
-        const room = getRoom(roomId);
-        return room ? room.createdBy === currentUser.id : false;
-    }, [currentUser, isAdmin, rooms]);
-
-
-    const value = { 
-        rooms, 
-        createRoom, 
-        joinRoom, 
-        leaveRoom, 
-        getRoom, 
-        updateRoomName, // เพิ่มฟังก์ชันที่ขาดไป
-        deleteRoom,     // เพิ่มฟังก์ชันที่ขาดไป
-        userCanEditRoom,// เพิ่มฟังก์ชันที่ขาดไป
-        ws, 
-        userId 
+    const connect = () => {
+      if (!active) return;
+      const configuredUrl = import.meta.env.VITE_WS_URL as string | undefined;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = configuredUrl || `${protocol}//${window.location.hostname}:8080`;
+      socket = new WebSocket(url);
+      socket.binaryType = 'blob';
+      setValue({ socket, status: 'connecting' });
+      socket.onopen = () => active && setValue({ socket, status: 'connected' });
+      socket.onclose = () => {
+        if (!active) return;
+        setValue({ socket: null, status: 'disconnected' });
+        reconnectTimer.current = window.setTimeout(connect, 2000);
+      };
+      socket.onerror = () => socket?.close();
     };
 
-    return <RoomContext.Provider value={value}>{children}</RoomContext.Provider>;
+    connect();
+    return () => {
+      active = false;
+      window.clearTimeout(reconnectTimer.current);
+      socket?.close();
+    };
+  }, []);
+
+  return <WebSocketContext.Provider value={value}>{children}</WebSocketContext.Provider>;
+};
+
+export const RoomProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const { currentUser, isAdmin } = useAuth();
+  const { socket: ws, status: connectionStatus } = useWebSocket();
+
+  useEffect(() => {
+    if (!ws) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (typeof event.data !== 'string') return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'initial-data' || data.type === 'room-update') {
+          setRooms(data.payload.rooms);
+          setIsLoading(false);
+        } else if (data.type === 'participant-update') {
+          setRooms(previous => previous.map(room => room.id === data.payload.roomId
+            ? { ...room, participants: data.payload.participants }
+            : room));
+        }
+      } catch (error) {
+        console.error('Invalid server message', error);
+      }
+    };
+    ws.addEventListener('message', handleMessage);
+    const requestRooms = () => ws.send(JSON.stringify({ type: 'get-initial-data' }));
+    if (ws.readyState === WebSocket.OPEN) requestRooms();
+    else ws.addEventListener('open', requestRooms, { once: true });
+    return () => ws.removeEventListener('message', handleMessage);
+  }, [ws]);
+
+  const send = useCallback((type: string, payload: object) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ type, payload }));
+    return true;
+  }, [ws]);
+
+  const createRoom = useCallback((name: string) => {
+    if (currentUser) send('create-room', { name, createdBy: currentUser.id });
+  }, [currentUser, send]);
+  const joinRoom = useCallback((roomId: string) => {
+    if (currentUser) send('join-room', { roomId, displayName: currentUser.username });
+  }, [currentUser, send]);
+  const leaveRoom = useCallback((roomId: string) => { send('leave-room', { roomId }); }, [send]);
+  const updateRoomName = useCallback((roomId: string, newName: string) => {
+    send('update-room-name', { roomId, newName, userId: currentUser?.id, isAdmin: isAdmin() });
+  }, [currentUser, isAdmin, send]);
+  const deleteRoom = useCallback((roomId: string) => {
+    send('delete-room', { roomId, userId: currentUser?.id, isAdmin: isAdmin() });
+  }, [currentUser, isAdmin, send]);
+  const getRoom = useCallback((roomId: string) => rooms.find(room => room.id === roomId), [rooms]);
+  const userCanEditRoom = useCallback((roomId: string) => {
+    const room = getRoom(roomId);
+    return Boolean(currentUser && room && (isAdmin() || room.createdBy === currentUser.id));
+  }, [currentUser, getRoom, isAdmin]);
+
+  const value = useMemo(() => ({ rooms, isLoading, connectionStatus, createRoom, joinRoom, leaveRoom,
+    getRoom, updateRoomName, deleteRoom, userCanEditRoom, ws }),
+  [rooms, isLoading, connectionStatus, createRoom, joinRoom, leaveRoom, getRoom, updateRoomName, deleteRoom, userCanEditRoom, ws]);
+  return <RoomContext.Provider value={value}>{children}</RoomContext.Provider>;
 };
