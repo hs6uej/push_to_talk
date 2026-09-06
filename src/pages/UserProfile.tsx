@@ -11,8 +11,7 @@ const UserProfile: React.FC = () => {
   } = useAuth();
   const {
     rooms,
-    updateRoomName,
-    userCanEditRoom
+    updateRoomName
   } = useRoom();
   const [newUsername, setNewUsername] = useState('');
   const [isEditingUsername, setIsEditingUsername] = useState(false);

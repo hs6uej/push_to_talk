@@ -15,4 +15,11 @@ module.exports = {
       { allowConstantExport: true },
     ],
   },
+  overrides: [
+    {
+      files: ['backend/**/*.js'],
+      env: { node: true },
+      rules: { '@typescript-eslint/no-var-requires': 'off' },
+    },
+  ],
 }

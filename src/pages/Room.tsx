@@ -17,7 +17,9 @@ const Room: React.FC = () => {
     joinRoom,
     leaveRoom,
     updateRoomName,
-    userCanEditRoom
+    userCanEditRoom,
+    isLoading,
+    ws
   } = useRoom();
   const {
     currentUser
@@ -30,18 +32,16 @@ const Room: React.FC = () => {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState('');
   const [showTranscripts, setShowTranscripts] = useState(false);
-  // Join room on component mount
+  // Join once the room list and socket are ready. Room updates must not trigger
+  // a leave/join cycle because that would interrupt incoming audio.
   useEffect(() => {
-    if (!room) {
-      navigate('/');
-      return;
-    }
+    if (isLoading) return;
     joinRoom(roomId);
-    // Leave room when component unmounts
-    return () => {
-      leaveRoom(roomId);
-    };
-  }, [roomId, joinRoom, leaveRoom, navigate, room]);
+    return () => leaveRoom(roomId);
+  }, [roomId, isLoading, ws, joinRoom, leaveRoom]);
+  useEffect(() => {
+    if (!isLoading && !room) navigate('/');
+  }, [isLoading, room, navigate]);
   // Update room data when it changes
   useEffect(() => {
     setRoom(getRoom(roomId));
@@ -58,8 +58,8 @@ const Room: React.FC = () => {
       setIsEditingName(false);
     }
   };
-  if (!room || !currentUser) {
-    return <div className="p-8 text-center">Room not found</div>;
+  if (isLoading || !room || !currentUser) {
+    return <div className="p-8 text-center text-gray-500">{isLoading ? 'กำลังโหลดห้อง…' : 'ไม่พบห้องนี้'}</div>;
   }
   const canEdit = userCanEditRoom(roomId);
   const transcriptions = getRoomTranscriptions(roomId);

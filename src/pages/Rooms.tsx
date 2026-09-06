@@ -9,7 +9,8 @@ const Rooms: React.FC = () => {
   const {
     rooms,
     createRoom,
-    joinRoom
+    joinRoom,
+    connectionStatus
   } = useRoom();
   const {
     currentUser
@@ -40,6 +41,9 @@ const Rooms: React.FC = () => {
           Create Room
         </button>
       </div>
+      {connectionStatus !== 'connected' && <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
+        กำลังเชื่อมต่อเซิร์ฟเวอร์แบบเรียลไทม์… กรุณาเปิด backend ด้วยคำสั่ง <code className="font-mono">npm run server</code>
+      </div>}
       {isCreating && <div className="bg-white shadow-md rounded-lg p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Create New Room</h2>
           <form onSubmit={handleCreateRoom} className="flex gap-4">

@@ -1,124 +1,131 @@
-// server.js
+/* eslint-env node */
+/* eslint-disable @typescript-eslint/no-var-requires */
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, maxPayload: 10 * 1024 * 1024 });
+const buildDirectory = path.join(__dirname, '..', 'dist');
 
-// Serve a React App (หลังจาก build แล้ว)
-app.use(express.static(path.join(__dirname, 'build')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
-});
+app.get('/health', (_req, res) => res.json({ ok: true, clients: wss.clients.size }));
+app.use(express.static(buildDirectory));
+app.get('*', (_req, res) => res.sendFile(path.join(buildDirectory, 'index.html')));
 
-// ใช้ Memory ของ Server ในการเก็บข้อมูลห้องและผู้ใช้
-let rooms = {}; // โครงสร้าง: { roomId: { id, name, createdBy, participants: { userId: { ws, displayName } } } }
+const rooms = new Map();
 
-wss.on('connection', (ws, req) => {
-    // ใช้ key ที่ WebSocket สร้างให้เป็น ID ชั่วคราวของผู้ใช้แต่ละคน
-    const userId = req.headers['sec-websocket-key']; 
-    let currentRoomId = null;
+const publicRooms = () => [...rooms.values()].map(room => ({
+  id: room.id,
+  name: room.name,
+  createdBy: room.createdBy,
+  participants: [...room.participants.values()].map(participant => participant.displayName)
+}));
 
-    ws.on('message', (message) => {
-        const data = JSON.parse(message);
+const send = (client, message) => {
+  if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message));
+};
 
-        switch (data.type) {
-            case 'get-initial-data':
-                // ส่งข้อมูลห้องทั้งหมดที่มีอยู่ไปให้ user ที่เพิ่งต่อเข้ามา
-                const allRooms = Object.values(rooms).map(r => ({...r, participants: Object.keys(r.participants)}));
-                ws.send(JSON.stringify({ type: 'initial-data', payload: { rooms: allRooms } }));
-                break;
+const broadcastRooms = () => {
+  const message = JSON.stringify({ type: 'room-update', payload: { rooms: publicRooms() } });
+  wss.clients.forEach(client => client.readyState === WebSocket.OPEN && client.send(message));
+};
 
-            case 'create-room':
-                const newRoomId = `room_${Date.now()}`;
-                const newRoom = { id: newRoomId, name: data.payload.name, createdBy: data.payload.createdBy, participants: {} };
-                rooms[newRoomId] = newRoom;
-                broadcastRoomUpdate();
-                break;
-            
-            case 'join-room':
-                currentRoomId = data.payload.roomId;
-                if (rooms[currentRoomId]) {
-                    rooms[currentRoomId].participants[userId] = { ws, displayName: data.payload.displayName };
-                    broadcastParticipantUpdate(currentRoomId);
-                }
-                break;
-            
-            case 'leave-room':
-                if (currentRoomId && rooms[currentRoomId] && rooms[currentRoomId].participants[userId]) {
-                    delete rooms[currentRoomId].participants[userId];
-                    broadcastParticipantUpdate(currentRoomId);
-                }
-                currentRoomId = null;
-                break;
+const broadcastParticipants = room => {
+  const message = { type: 'participant-update', payload: {
+    roomId: room.id,
+    participants: [...room.participants.values()].map(participant => participant.displayName)
+  } };
+  wss.clients.forEach(client => send(client, message));
+};
 
-            case 'send-transcription':
-                 if (currentRoomId && rooms[currentRoomId]) {
-                    broadcastToRoom(currentRoomId, { type: 'new-transcription', payload: data.payload });
-                }
-                break;
+wss.on('connection', ws => {
+  const connectionId = crypto.randomUUID();
+  let currentRoomId = null;
 
-            // ส่วนจัดการสัญญาณ WebRTC
-            case 'signal':
-                if (data.payload.to && currentRoomId && rooms[currentRoomId] && rooms[currentRoomId].participants[data.payload.to]) {
-                    const targetWs = rooms[currentRoomId].participants[data.payload.to].ws;
-                    targetWs.send(JSON.stringify({ type: 'signal', payload: { from: userId, signal: data.payload.signal } }));
-                }
-                break;
-        }
-    });
-
-    ws.on('close', () => {
-        if (currentRoomId && rooms[currentRoomId] && rooms[currentRoomId].participants[userId]) {
-            delete rooms[currentRoomId].participants[userId];
-            // ถ้าไม่มีคนในห้องแล้ว ให้ลบห้องทิ้ง
-            if (Object.keys(rooms[currentRoomId].participants).length === 0) {
-                delete rooms[currentRoomId];
-                broadcastRoomUpdate();
-            } else {
-                broadcastParticipantUpdate(currentRoomId);
-            }
-        }
-    });
-});
-
-// ฟังก์ชันสำหรับส่งข้อมูลไปหาทุกคนในห้องที่กำหนด
-function broadcastToRoom(roomId, message) {
-    if (rooms[roomId]) {
-        Object.values(rooms[roomId].participants).forEach(participant => {
-            if (participant.ws.readyState === WebSocket.OPEN) {
-                participant.ws.send(JSON.stringify(message));
-            }
-        });
+  const leaveCurrentRoom = () => {
+    const room = currentRoomId ? rooms.get(currentRoomId) : null;
+    if (room) {
+      room.participants.delete(connectionId);
+      broadcastParticipants(room);
     }
-}
+    currentRoomId = null;
+  };
 
-// ฟังก์ชันสำหรับอัปเดตรายชื่อคนในห้อง
-function broadcastParticipantUpdate(roomId) {
-    if(rooms[roomId]) {
-        const payload = {
-            type: 'participant-update',
-            payload: { roomId, participants: Object.keys(rooms[roomId].participants) }
-        };
-        broadcastToRoom(roomId, payload);
-    }
-}
-
-// ฟังก์ชันสำหรับอัปเดตรายชื่อห้องทั้งหมดให้ทุกคน
-function broadcastRoomUpdate() {
-     const roomList = Object.values(rooms).map(r => ({...r, participants: Object.keys(r.participants)}));
-     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'room-update', payload: { rooms: roomList } }));
+  ws.on('message', (raw, isBinary) => {
+    if (isBinary) {
+      const room = currentRoomId ? rooms.get(currentRoomId) : null;
+      if (!room) return;
+      room.participants.forEach((participant, id) => {
+        if (id !== connectionId && participant.ws.readyState === WebSocket.OPEN) {
+          participant.ws.send(raw, { binary: true });
         }
-    });
-}
+      });
+      return;
+    }
 
-// ตั้งค่า Port ให้ Server ทำงาน
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-    console.log(`Server is listening on port ${PORT}`);
+    let data;
+    try { data = JSON.parse(raw.toString()); } catch { return; }
+    const payload = data.payload || {};
+
+    switch (data.type) {
+      case 'get-initial-data':
+        send(ws, { type: 'initial-data', payload: { rooms: publicRooms() } });
+        break;
+      case 'create-room': {
+        const name = String(payload.name || '').trim().slice(0, 80);
+        if (!name || !payload.createdBy) break;
+        const id = `room_${crypto.randomUUID()}`;
+        rooms.set(id, { id, name, createdBy: payload.createdBy, participants: new Map() });
+        broadcastRooms();
+        break;
+      }
+      case 'join-room': {
+        const room = rooms.get(payload.roomId);
+        const displayName = String(payload.displayName || '').trim().slice(0, 40);
+        if (!room || !displayName) break;
+        leaveCurrentRoom();
+        currentRoomId = room.id;
+        room.participants.set(connectionId, { ws, displayName });
+        broadcastParticipants(room);
+        break;
+      }
+      case 'leave-room':
+        leaveCurrentRoom();
+        break;
+      case 'update-room-name': {
+        const room = rooms.get(payload.roomId);
+        const name = String(payload.newName || '').trim().slice(0, 80);
+        if (room && name && (payload.isAdmin || room.createdBy === payload.userId)) {
+          room.name = name;
+          broadcastRooms();
+        }
+        break;
+      }
+      case 'delete-room': {
+        const room = rooms.get(payload.roomId);
+        if (room && (payload.isAdmin || room.createdBy === payload.userId)) {
+          room.participants.forEach(participant => send(participant.ws, { type: 'room-deleted', payload: { roomId: room.id } }));
+          rooms.delete(room.id);
+          broadcastRooms();
+        }
+        break;
+      }
+      case 'send-transcription': {
+        const room = currentRoomId ? rooms.get(currentRoomId) : null;
+        if (!room || payload.roomId !== currentRoomId) break;
+        room.participants.forEach(participant => send(participant.ws, { type: 'new-transcription', payload }));
+        break;
+      }
+      default:
+        break;
+    }
+  });
+
+  ws.on('close', leaveCurrentRoom);
 });
+
+const PORT = Number(process.env.PORT) || 8080;
+server.listen(PORT, () => console.log(`PTT server listening on http://localhost:${PORT}`));
