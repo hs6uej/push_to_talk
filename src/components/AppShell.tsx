@@ -2,7 +2,7 @@
 import React, { useEffect } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArchiveIcon, Building2Icon, HeadsetIcon, MapIcon, MessagesSquareIcon, SettingsIcon, ShieldIcon, UsersIcon,
+  ArchiveIcon, BookOpenIcon, Building2Icon, HeadsetIcon, MapIcon, MessagesSquareIcon, SettingsIcon, ShieldIcon, UsersIcon,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { isOrgAdmin, isStaff, isSuper } from '../lib/api';
@@ -30,6 +30,7 @@ const NAV: NavItem[] = [
   { to: '/vault', label: 'คลังข้อความ', icon: ArchiveIcon, staff: true },
   { to: '/org', label: 'องค์กร', icon: Building2Icon, orgAdmin: true },
   { to: '/admin', label: 'Super admin', icon: ShieldIcon, superOnly: true },
+  { to: '/info', label: 'ข้อมูล', icon: BookOpenIcon, mobile: true },
   { to: '/settings', label: 'ตั้งค่า', icon: SettingsIcon, mobile: true },
 ];
 

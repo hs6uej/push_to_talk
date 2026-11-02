@@ -11,6 +11,7 @@ import Admin from './pages/Admin';
 import Settings from './pages/Settings';
 import OrgConsole from './pages/OrgConsole';
 import InvitePage from './pages/InvitePage';
+import Info from './pages/Info';
 import AppShell from './components/AppShell';
 import { useAuth } from './contexts/AuthContext';
 import { isOrgAdmin, isStaff, isSuper } from './lib/api';
@@ -36,12 +37,14 @@ export function AppRouter() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/i/:code" element={<InvitePage />} />
+        <Route path="/docs" element={<Info standalone />} />
         <Route element={<Protected><AppShell /></Protected>}>
           <Route path="/" element={<Home />} />
           <Route path="/contacts" element={<Contacts />} />
           <Route path="/c/:channelId" element={<ChannelPage />} />
           <Route path="/map" element={<MapPage />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/info" element={<Info />} />
           <Route path="/dispatch" element={<RoleGate need="staff"><Dispatch /></RoleGate>} />
           <Route path="/vault" element={<RoleGate need="staff"><Vault /></RoleGate>} />
           <Route path="/org" element={<RoleGate need="orgAdmin"><OrgConsole /></RoleGate>} />

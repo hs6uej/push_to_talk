@@ -20,6 +20,7 @@ export const AuthShell: React.FC<{ title: string; children: React.ReactNode; wid
       </div>
       {children}
       {config.supportContact && <p className="mt-6 text-center text-xs text-slate-500">ติดต่อผู้ดูแล: {config.supportContact}</p>}
+      <p className="mt-4 text-center text-xs"><Link to="/docs" className="text-slate-500 hover:text-emerald-600 underline">วิธีใช้งานและข้อมูลระบบ</Link></p>
     </div>
   </div>
   );
