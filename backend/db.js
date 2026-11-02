@@ -251,9 +251,13 @@ function seed() {
   if (!db.prepare('SELECT id FROM channels WHERE emergency = 1 AND org_id IS NULL').get()) {
     createChannel({ name: 'ฉุกเฉิน', description: 'ช่องรับแจ้งเหตุ SOS', emergency: 1, isDefault: 1 });
   }
-  // ช่องสาธารณะเริ่มต้นเดิมให้เป็นช่องเข้าร่วมอัตโนมัติ
-  db.prepare("UPDATE channels SET is_default = 1 WHERE org_id IS NULL AND type = 'channel' AND id = (SELECT MIN(id) FROM channels WHERE org_id IS NULL AND type = 'channel' AND emergency = 0)").run();
-  db.prepare("UPDATE channels SET is_default = 1 WHERE org_id IS NULL AND emergency = 1").run();
+  // ทำครั้งเดียวตอนอัปเกรด: ช่องสาธารณะเดิมเป็นช่องเข้าร่วมอัตโนมัติ (หลังจากนั้น Super admin เป็นคนเลือกเอง)
+  db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
+  if (!db.prepare("SELECT 1 FROM meta WHERE key = 'public_defaults_migrated'").get()) {
+    db.prepare("UPDATE channels SET is_default = 1 WHERE org_id IS NULL AND type = 'channel' AND id = (SELECT MIN(id) FROM channels WHERE org_id IS NULL AND type = 'channel' AND emergency = 0)").run();
+    db.prepare("UPDATE channels SET is_default = 1 WHERE org_id IS NULL AND emergency = 1").run();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('public_defaults_migrated', '1')").run();
+  }
 }
 seed();
 

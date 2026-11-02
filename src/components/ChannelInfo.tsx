@@ -119,10 +119,10 @@ const ChannelInfo: React.FC<{ channelId: number; onClose: () => void }> = ({ cha
               checked={channel.visibility === 'private'}
               onChange={(v) => act(() => api.patch(`/api/channels/${channelId}`, { visibility: v ? 'private' : 'open' }))}
             />
-            {elevated && channel.orgId && (
+            {elevated && (channel.orgId || me?.role === 'superadmin') && (
               <Toggle
-                label="ห้องรวมขององค์กร"
-                hint="สมาชิกองค์กรทุกคน (รวมถึงคนที่เข้าใหม่) จะถูกเพิ่มเข้าช่องนี้อัตโนมัติ"
+                label={channel.orgId ? 'ห้องรวมขององค์กร' : 'เข้าร่วมอัตโนมัติเมื่อสมัครสมาชิก'}
+                hint={channel.orgId ? 'สมาชิกองค์กรทุกคน (รวมถึงคนที่เข้าใหม่) จะถูกเพิ่มเข้าช่องนี้อัตโนมัติ' : 'ผู้ใช้ที่สมัครใหม่ทุกคนจะเป็นสมาชิกห้องนี้ทันที'}
                 checked={channel.isDefault}
                 onChange={(v) => act(() => api.patch(`/api/channels/${channelId}`, { isDefault: v }))}
               />
