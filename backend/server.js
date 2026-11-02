@@ -1,124 +1,70 @@
-// server.js
+// server.js — ประกอบ REST API + WebSocket + static frontend สำหรับ PTT (แนว Zello, หลายองค์กร)
 const express = require('express');
 const http = require('http');
-const WebSocket = require('ws');
 const path = require('path');
+const fs = require('fs');
+const { db, AUDIO_DIR, FILES_DIR } = require('./db');
+const rt = require('./realtime');
+const H = require('./http');
+
+const PORT = process.env.PORT || 8080;
+const STATIC_DIR = process.env.STATIC_DIR || path.join(__dirname, 'public');
+const { getSettings, publicConfig } = require('./settings');
 
 const app = express();
+app.set('trust proxy', 'loopback, uniquelocal');
+app.use(express.json({ limit: '64kb' }));
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
-// Serve a React App (หลังจาก build แล้ว)
-app.use(express.static(path.join(__dirname, 'build')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+app.use('/api', require('./routes/account').router);
+app.use('/api', require('./routes/channels').router);
+app.use('/api', require('./routes/orgs').router);
+app.use('/api', require('./routes/safety').router);
+app.use('/api', require('./routes/admin').router);
+app.get('/healthz', (req, res) => res.json({ ok: true }));
+app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
+
+// ---------- static frontend ----------
+// manifest + index.html ใช้ชื่อแอป/โลโก้/สีจากค่าตั้งของ Super admin
+const THEME_HEX = { emerald: '#059669', teal: '#0d9488', sky: '#0284c7', blue: '#2563eb', indigo: '#4f46e5', violet: '#7c3aed', rose: '#e11d48', orange: '#ea580c', amber: '#d97706' };
+const escHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+app.get('/manifest.webmanifest', (req, res) => {
+  const c = publicConfig();
+  const icon = c.logo ? { src: c.logo, sizes: '320x320', type: 'image/jpeg', purpose: 'any' } : { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' };
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/manifest+json').send(JSON.stringify({
+    name: c.appName, short_name: c.shortName, description: c.tagline, start_url: '/', display: 'standalone', orientation: 'portrait',
+    background_color: '#0f172a', theme_color: THEME_HEX[c.primaryColor] || '#0f172a', icons: [icon],
+  }));
 });
 
-// ใช้ Memory ของ Server ในการเก็บข้อมูลห้องและผู้ใช้
-let rooms = {}; // โครงสร้าง: { roomId: { id, name, createdBy, participants: { userId: { ws, displayName } } } }
-
-wss.on('connection', (ws, req) => {
-    // ใช้ key ที่ WebSocket สร้างให้เป็น ID ชั่วคราวของผู้ใช้แต่ละคน
-    const userId = req.headers['sec-websocket-key']; 
-    let currentRoomId = null;
-
-    ws.on('message', (message) => {
-        const data = JSON.parse(message);
-
-        switch (data.type) {
-            case 'get-initial-data':
-                // ส่งข้อมูลห้องทั้งหมดที่มีอยู่ไปให้ user ที่เพิ่งต่อเข้ามา
-                const allRooms = Object.values(rooms).map(r => ({...r, participants: Object.keys(r.participants)}));
-                ws.send(JSON.stringify({ type: 'initial-data', payload: { rooms: allRooms } }));
-                break;
-
-            case 'create-room':
-                const newRoomId = `room_${Date.now()}`;
-                const newRoom = { id: newRoomId, name: data.payload.name, createdBy: data.payload.createdBy, participants: {} };
-                rooms[newRoomId] = newRoom;
-                broadcastRoomUpdate();
-                break;
-            
-            case 'join-room':
-                currentRoomId = data.payload.roomId;
-                if (rooms[currentRoomId]) {
-                    rooms[currentRoomId].participants[userId] = { ws, displayName: data.payload.displayName };
-                    broadcastParticipantUpdate(currentRoomId);
-                }
-                break;
-            
-            case 'leave-room':
-                if (currentRoomId && rooms[currentRoomId] && rooms[currentRoomId].participants[userId]) {
-                    delete rooms[currentRoomId].participants[userId];
-                    broadcastParticipantUpdate(currentRoomId);
-                }
-                currentRoomId = null;
-                break;
-
-            case 'send-transcription':
-                 if (currentRoomId && rooms[currentRoomId]) {
-                    broadcastToRoom(currentRoomId, { type: 'new-transcription', payload: data.payload });
-                }
-                break;
-
-            // ส่วนจัดการสัญญาณ WebRTC
-            case 'signal':
-                if (data.payload.to && currentRoomId && rooms[currentRoomId] && rooms[currentRoomId].participants[data.payload.to]) {
-                    const targetWs = rooms[currentRoomId].participants[data.payload.to].ws;
-                    targetWs.send(JSON.stringify({ type: 'signal', payload: { from: userId, signal: data.payload.signal } }));
-                }
-                break;
-        }
-    });
-
-    ws.on('close', () => {
-        if (currentRoomId && rooms[currentRoomId] && rooms[currentRoomId].participants[userId]) {
-            delete rooms[currentRoomId].participants[userId];
-            // ถ้าไม่มีคนในห้องแล้ว ให้ลบห้องทิ้ง
-            if (Object.keys(rooms[currentRoomId].participants).length === 0) {
-                delete rooms[currentRoomId];
-                broadcastRoomUpdate();
-            } else {
-                broadcastParticipantUpdate(currentRoomId);
-            }
-        }
-    });
+app.use(express.static(STATIC_DIR, { index: false, maxAge: '1h' }));
+app.get(/^\/(?!api\/|ws).*/, (req, res, next) => {
+  const index = path.join(STATIC_DIR, 'index.html');
+  if (!fs.existsSync(index)) return next();
+  const c = publicConfig();
+  let html = fs.readFileSync(index, 'utf8')
+    .replace(/<title>[^<]*<\/title>/, `<title>${escHtml(c.appName)}</title>`)
+    .replace(/<meta name="theme-color" content="[^"]*"/, `<meta name="theme-color" content="${THEME_HEX[c.primaryColor] || '#0f172a'}"`);
+  if (c.logo) html = html.replace(/href="\/icon\.svg"/g, `href="${c.logo}"`);
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(html);
 });
 
-// ฟังก์ชันสำหรับส่งข้อมูลไปหาทุกคนในห้องที่กำหนด
-function broadcastToRoom(roomId, message) {
-    if (rooms[roomId]) {
-        Object.values(rooms[roomId].participants).forEach(participant => {
-            if (participant.ws.readyState === WebSocket.OPEN) {
-                participant.ws.send(JSON.stringify(message));
-            }
-        });
-    }
+// ---------- เก็บข้อมูลตามระยะเวลา (RETENTION_DAYS) ----------
+function purgeOld() {
+  const RETENTION_DAYS = getSettings().retentionDays;
+  if (!RETENTION_DAYS) return;
+  const cutoff = Date.now() - RETENTION_DAYS * 86400000;
+  const files = db.prepare('SELECT kind, file FROM messages WHERE created_at < ? AND file IS NOT NULL').all(cutoff);
+  db.prepare('DELETE FROM messages WHERE created_at < ?').run(cutoff);
+  db.prepare('DELETE FROM locations WHERE created_at < ?').run(cutoff);
+  files.forEach((f) => fs.rm(path.join(f.kind === 'audio' ? AUDIO_DIR : FILES_DIR, f.file), { force: true }, () => {}));
+  if (files.length) console.log(`Retention: removed ${files.length} files older than ${RETENTION_DAYS} days`);
 }
+purgeOld();
+setInterval(purgeOld, 6 * 3600 * 1000);
 
-// ฟังก์ชันสำหรับอัปเดตรายชื่อคนในห้อง
-function broadcastParticipantUpdate(roomId) {
-    if(rooms[roomId]) {
-        const payload = {
-            type: 'participant-update',
-            payload: { roomId, participants: Object.keys(rooms[roomId].participants) }
-        };
-        broadcastToRoom(roomId, payload);
-    }
-}
-
-// ฟังก์ชันสำหรับอัปเดตรายชื่อห้องทั้งหมดให้ทุกคน
-function broadcastRoomUpdate() {
-     const roomList = Object.values(rooms).map(r => ({...r, participants: Object.keys(r.participants)}));
-     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'room-update', payload: { rooms: roomList } }));
-        }
-    });
-}
-
-// ตั้งค่า Port ให้ Server ทำงาน
-const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
-    console.log(`Server is listening on port ${PORT}`);
-});
+rt.init(server, H.userFromToken);
+server.listen(PORT, () => console.log(`PTT server listening on port ${PORT}`));

@@ -1,162 +1,109 @@
-import React, { useEffect, useState, createContext, useContext } from 'react';
-interface User {
-  id: string;
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { api, getToken, Me, setToken } from '../lib/api';
+import { store, useStore } from '../lib/store';
+
+interface AuthContextType {
+  currentUser: Me | null;
+  loading: boolean;
+  allowRegister: boolean;
+  login: (username: string, password: string) => Promise<void>;
+  register: (data: RegisterData) => Promise<void>;
+  reloadMe: () => Promise<void>;
+  logout: () => void;
+  setAvatar: (file: Blob | null) => Promise<void>;
+  updateProfile: (changes: { username?: string; displayName?: string; currentPassword?: string; newPassword?: string }) => Promise<void>;
+}
+
+export interface RegisterData {
   username: string;
   password: string;
-  role?: string;
+  displayName?: string;
+  mode: 'personal' | 'join-org' | 'create-org';
+  orgCode?: string;
+  orgName?: string;
 }
-interface AuthContextType {
-  currentUser: User | null;
-  login: (username: string, password: string) => boolean;
-  register: (username: string, password: string) => boolean;
-  logout: () => void;
-  error: string | null;
-  updateUsername: (newUsername: string) => boolean;
-  updatePassword: (currentPassword: string, newPassword: string) => boolean;
-  isAdmin: () => boolean;
-}
+
 const AuthContext = createContext<AuthContextType | null>(null);
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };
-export const AuthProvider: React.FC<{
-  children: React.ReactNode;
-}> = ({
-  children
-}) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Load user from localStorage on initial render
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<Me | null>(null);
+  const [loading, setLoading] = useState(!!getToken());
+  const allowRegister = useStore((s) => s.config.allowRegister);
+  // ข้อมูลผู้ใช้ล่าสุดจาก WebSocket (เช่น สถานะ/บทบาทที่เปลี่ยน)
+  const liveMe = useStore((s) => s.me);
+
   useEffect(() => {
-    const storedUser = localStorage.getItem('currentUser');
-    if (storedUser) {
-      setCurrentUser(JSON.parse(storedUser));
-    }
+    if (!getToken()) return;
+    api.get<{ user: Me }>('/api/me')
+      .then(({ user }) => setUser(user))
+      .catch(() => setToken(null))
+      .finally(() => setLoading(false));
   }, []);
-  // Initialize admin user if not exists
+
   useEffect(() => {
-    const users = getUsers();
-    if (!users.some(user => user.username === 'admin')) {
-      users.push({
-        id: 'admin-id',
-        username: 'admin',
-        password: 'forum18',
-        role: 'admin'
-      });
-      saveUsers(users);
-    }
+    if (user) store.start(user);
+  }, [user?.id]);
+
+  const logout = useCallback(() => {
+    store.stop();
+    setToken(null);
+    setUser(null);
   }, []);
-  // Get users from localStorage
-  const getUsers = (): User[] => {
-    const users = localStorage.getItem('users');
-    return users ? JSON.parse(users) : [];
-  };
-  // Save users to localStorage
-  const saveUsers = (users: User[]) => {
-    localStorage.setItem('users', JSON.stringify(users));
-  };
-  const login = (username: string, password: string): boolean => {
-    setError(null);
-    const users = getUsers();
-    const user = users.find(u => u.username === username && u.password === password);
-    if (user) {
-      setCurrentUser(user);
-      localStorage.setItem('currentUser', JSON.stringify(user));
-      return true;
-    } else {
-      setError('Invalid username or password');
-      return false;
-    }
-  };
-  const register = (username: string, password: string): boolean => {
-    setError(null);
-    const users = getUsers();
-    if (users.some(u => u.username === username)) {
-      setError('Username already exists');
-      return false;
-    }
-    const newUser = {
-      id: Date.now().toString(),
-      username,
-      password,
-      role: 'user'
+
+  useEffect(() => {
+    window.addEventListener('ptt:logout', logout);
+    // ข้อมูลตัวเองเปลี่ยนจากฝั่งเซิร์ฟเวอร์ (อนุมัติเข้าองค์กร/เปลี่ยนบทบาท)
+    const onMe = (e: Event) => setUser((u) => (u ? { ...(e as CustomEvent).detail, status: u.status } : u));
+    window.addEventListener('ptt:me', onMe);
+    return () => {
+      window.removeEventListener('ptt:logout', logout);
+      window.removeEventListener('ptt:me', onMe);
     };
-    users.push(newUser);
-    saveUsers(users);
-    setCurrentUser(newUser);
-    localStorage.setItem('currentUser', JSON.stringify(newUser));
-    return true;
-  };
-  const logout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('currentUser');
-  };
-  const updateUsername = (newUsername: string): boolean => {
-    if (!currentUser) return false;
-    const users = getUsers();
-    if (users.some(u => u.username === newUsername && u.id !== currentUser.id)) {
-      setError('Username already exists');
-      return false;
-    }
-    const updatedUsers = users.map(user => {
-      if (user.id === currentUser.id) {
-        return {
-          ...user,
-          username: newUsername
-        };
-      }
-      return user;
-    });
-    const updatedUser = {
-      ...currentUser,
-      username: newUsername
-    };
-    saveUsers(updatedUsers);
-    setCurrentUser(updatedUser);
-    localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-    return true;
-  };
-  const updatePassword = (currentPassword: string, newPassword: string): boolean => {
-    if (!currentUser) return false;
-    if (currentUser.password !== currentPassword) {
-      setError('Current password is incorrect');
-      return false;
-    }
-    const users = getUsers();
-    const updatedUsers = users.map(user => {
-      if (user.id === currentUser.id) {
-        return {
-          ...user,
-          password: newPassword
-        };
-      }
-      return user;
-    });
-    const updatedUser = {
-      ...currentUser,
-      password: newPassword
-    };
-    saveUsers(updatedUsers);
-    setCurrentUser(updatedUser);
-    localStorage.setItem('currentUser', JSON.stringify(updatedUser));
-    return true;
-  };
-  const isAdmin = (): boolean => {
-    return currentUser?.role === 'admin';
-  };
-  const value = {
-    currentUser,
-    login,
-    register,
-    logout,
-    error,
-    updateUsername,
-    updatePassword,
-    isAdmin
-  };
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  }, [logout]);
+
+  const reloadMe = useCallback(async () => {
+    const { user } = await api.get<{ user: Me }>('/api/me');
+    setUser(user);
+    store.setMe(user);
+  }, []);
+
+  const login = useCallback(async (username: string, password: string) => {
+    const { token, user } = await api.post<{ token: string; user: Me }>('/api/auth/login', { username, password });
+    setToken(token);
+    setUser(user);
+  }, []);
+
+  const register = useCallback(async (data: RegisterData) => {
+    const { token, user } = await api.post<{ token: string; user: Me }>('/api/auth/register', data);
+    setToken(token);
+    setUser(user);
+  }, []);
+
+  const updateProfile = useCallback(async (changes: { username?: string; displayName?: string; currentPassword?: string; newPassword?: string }) => {
+    const { user } = await api.patch<{ user: Me }>('/api/me', changes);
+    setUser(user);
+    store.setMe(user);
+  }, []);
+
+  const setAvatar = useCallback(async (file: Blob | null) => {
+    const { user } = file ? await api.upload<{ user: Me }>('/api/me/avatar', file) : await api.del<{ user: Me }>('/api/me/avatar');
+    setUser(user);
+    store.setMe(user);
+  }, []);
+
+  const currentUser = user && liveMe && liveMe.id === user.id
+    ? { ...user, status: liveMe.status, avatar: liveMe.avatar, displayName: liveMe.displayName }
+    : user;
+
+  return (
+    <AuthContext.Provider value={{ currentUser, loading, allowRegister, login, register, reloadMe, logout, updateProfile, setAvatar }}>
+      {children}
+    </AuthContext.Provider>
+  );
 };

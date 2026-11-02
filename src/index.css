@@ -3,3 +3,12 @@
 @import 'tailwindcss/components';
 @import 'tailwindcss/utilities';
 /* DO NOT DELETE THESE TAILWIND IMPORTS, OTHERWISE THE STYLING WILL NOT RENDER AT ALL */
+/* สีหลักเริ่มต้น (emerald) — theme.ts เขียนทับตามค่าตั้งของแอป */
+:root {
+  --brand-50: 236 253 245; --brand-100: 209 250 229; --brand-200: 167 243 208; --brand-300: 110 231 183;
+  --brand-400: 52 211 153; --brand-500: 16 185 129; --brand-600: 5 150 105; --brand-700: 4 120 87;
+  --brand-800: 6 95 70; --brand-900: 6 78 59; --brand-950: 2 44 34;
+}
+html, body, #root { height: 100%; }
+body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+.leaflet-container { font-family: inherit; }
